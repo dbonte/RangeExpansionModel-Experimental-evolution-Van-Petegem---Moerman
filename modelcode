@@ -1,0 +1,431 @@
+# -*- coding: utf-8 -*-
+"""
+Created on We Oct 19 21:54:13 2016
+@author: Felix Moerman, adapted by DBonte
+Modifications by Dries: 
+implementation of new reaction norm dispersal according to relatedness (data from Bitume et al. 2013,with Bonte et al. 2014 as a refernce for the mix;, combined day1, final graph mean distanc)
+see excell sheet Relatedness_bitume
+implementaion of reserve-threshold for dispersal: only those mites with sufficient reserves disperse
+Reproduction function according to own data ~ Barati & Hejazi 2015 Exp Appl Acar
+Choice function to allow/switch off evolution
+standard deviations to 95%CI
+threshold 3.35 (disp) & 1-3 (repr) standard
+sex ratio is now considered!
+"""
+
+
+import numpy.random as rnd
+import numpy as np
+import matplotlib.pyplot as plt
+rnd.seed(40)
+
+
+reshuffling=True
+Evolution=True
+
+#initial parameters
+#initial means and standard deviations parameter values at start of experiment
+agemature=7.5             #mean age at which individuals reach maturity
+sdagemature=0.98       #standard deviation on age of maturity
+fecundity=7             #Mean fecundity of individual (ind/log(day), logistic distribution))
+sdfec = 0.4           #standard deviation on fecundity
+adsurv=0.95             #adult survival rate, proportion of individuals reaching the adult age, binomial distribution
+longevity=13            #longevity, as the age at which individuals on average die
+sdlongevity=0.98           #standard deviation on longevity
+feed=8                  #pmean surface of leaf eaten by an adult individual (in mm²)
+sdfeed=0.4             #standard deviation on leaf consumption
+energyloss=7            #energy lost by an individual on a given day
+dispsurv=1      
+sex_ratio=0.66
+        #proportion of individuals surviving dispersal event
+
+genotypes=["a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m", "n", "o", "p", "q", "r", "s", "t", "u", "v", "w", "x", "y", "z"]        #list of genotypes to calculate relatedness
+
+
+
+#Creation of mite object
+class mite():
+    #Parameters need to be fed. Age has default value 0 (fresh eggs) but can be changed to other values (for initiation of metapopulation)
+    def __init__(self, agemature, fecundity, adsurv, longevity, genotype, female, age=0):
+        self.age=age                        #age of mite
+        self.agemature=agemature            #age of maturity
+        self.fecundity=fecundity            #fecundity of mite
+        self.adsurv=adsurv                  #chance to reach adulthood
+        self.longevity = longevity          #longevity of mites
+        self.reserve=1                      #standard energy reserve at day=0
+        #self.surv variable gives whether a specific mite will reach adulthood
+        if rnd.uniform()<=self.adsurv:
+            self.surv=True
+        else:
+            self.surv=False
+        self.genotype=genotype
+        self.female=True
+    
+    #Reproduction function, requires population size as input (density dependent reproduction). 
+    #function return the number of offspring produced by 1 mite on a single day   
+    def reproduce(self, population):
+        #if the individual is mature, determine number of offspring
+        #print(self.reserve)
+        if self.age >= self.agemature and self.reserve>3 and self.female==True:
+            #number of offspring is calculated from poisson distribution of mean fecundity and decreases with age
+            #DB -> relationship according to linearly decreasing function as Barati & Hejazi 2015 Exp Appl Acar, own data
+            #offspring= rnd.poisson(self.fecundity//(self.age-self.agemature+1))
+            #max to avoid poisson sampling from number<0
+            #ONLY FEMALES DISPERSE
+            offspring= rnd.poisson(max(0,self.fecundity-0.45*(self.age-self.agemature+1)))
+        else:
+            offspring=0
+        return offspring
+    
+    #Ageing function increases age of mites by 1
+    def ageing(self):
+        self.age += 1
+        
+    
+#Function to determine whether mite dies (due to old age, lack of resources or not surviving to adulthood), and subsequently removes mites from subpopulation
+def die(subpop, mite):
+    #if mite age reaches longevity,if energy reserves are depleted, mite dies
+    if mite.age >= longevity or mite.reserve <= 0:
+        subpop.population.remove(mite)
+        
+    #Stochastic chance of mites to die (determined at birth) before reproducing
+    elif mite.age==(mite.agemature-1) and mite.surv==False:
+        subpop.population.remove(mite)
+
+
+#Metapopulation class, requires no input of factors, but draws from parameters listed at top
+class metapop():
+    def __init__(self):
+        self.sublib={}      #create a library for the subpopulations, using the position along the metapop as key
+        self.time=0         #a timer tracking the age of the metapopulation
+        sub001=subpop(1)    #create the first subpopulation (see below under subpop class)
+        
+        #add ten mites to the subpop, with traits drawn from parameter distribution (see top)
+        for i in range(10): 
+            age=round(rnd.normal(agemature, sdagemature))       #adult mites are picked, so age == agemature
+            agemat = rnd.normal(agemature, sdagemature)
+            fec=max(rnd.normal(fecundity, sdfec), 1)
+            survival=rnd.binomial(1, adsurv)
+            long=rnd.normal(longevity, sdlongevity)
+            genotype=genotypes[i]
+            female=True
+            sub001.population.append(mite(agemat, fec, survival, long, genotype, female, age))
+        
+        #add the subpop to the library with key==1    
+        self.sublib[1]=sub001
+        
+        #add 3 more empty subpopulations at positions 2, 3 and 4
+        for i in range(2, 5):
+            self.sublib[i]=subpop(i)
+    
+    #function to let all individuals disperse
+    def disperse(self):
+        x=len(self.sublib)
+        dispersers={} #empty library for the potential dispersers
+        
+        #for every individual in every subpopulation:
+        for subpop in self.sublib.values():
+            adults=0
+            genotypes=[]
+            
+            #determine adult population size and a list of genotypes (for relatedness)
+            for ind in subpop.population:
+                if ind.age>= ind.agemature:
+                    adults += 1
+                    genotypes.append(ind.genotype)
+            adults /= 8          #adults is divided by 8 to get /cm² density of adults
+            
+            for ind in subpop.population:
+                #only adult individuals will be allowed to disperse// and those allowed to feed succesfully during development
+                #if ind.age>= ind.agemature and  ind.reserve>3.35:
+                if ind.age>= ind.agemature and ind.female==True and  ind.reserve>3.35:   
+                    #determine relatedness of individual to others on same patch:
+                    relatedness= (genotypes.count(ind.genotype)-1)/len(genotypes)
+                   
+                    #draw 2 numbers from a uniform distribution in order to determine whether an individual will a) disperse 1 or 2 patches
+                    # and b)survive dispersal
+                    dispersalchance=rnd.uniform()
+                    survival=rnd.uniform()
+                    
+                    #calculate the probabilities of either moving one or two patches
+                    #data from Bitume
+                    limit1 =  1.0 -0.56*relatedness
+                    limit2 = limit1 + 0.1731 - 0.33*relatedness
+                                        
+                    #needs to be standard for high densities 
+                                        #limit 1 changes to reduce dispersal under no kin comp
+                    if relatedness <0.38: 
+                        limit1=0.88
+                        limit2=1
+                    #determine the number of patches moved
+                    if dispersalchance <= limit1:
+                        moves=0
+                    elif dispersalchance <= limit2:
+                        moves=1
+                    else:
+                        moves=2
+                        
+                    #let surviving individuals disperse the right number of moves
+                    if moves != 0 and survival <= dispsurv and subpop.position != x:
+                        
+                        #in case individual disperses and survives dispersal, determine target location
+                        if subpop.position==1:
+                            destination=1+moves
+                        else:
+                            destination=min(x, subpop.position + moves)
+                            #min omdat niet verder kunnen dan laatste posities
+                                                      
+                        #add dispersing individual to library with destination patch as key
+                        #DB: do not understand, since in never used libraries
+                        dispersers[destination]=dispersers.get(destination, [])
+                        dispersers[destination].append(ind)
+                        #print (ind.reserve)
+                        
+                        #remove individual from original subpopulation/patch
+                        subpop.population.remove(ind)
+                        
+                    #in case mite does not survive dispersal, let it die
+                    elif survival > dispsurv:
+                        subpop.population.remove(ind)
+        
+        #add mites from disperser list to their new subpopulation/patch
+        for dest, mitelist in dispersers.items():
+            for ind2 in mitelist:
+                self.sublib[dest].population.append(ind2)
+    
+    #function to extend metapopulation in case individuals reach last or next to last subpopulation            
+    def extend(self):
+        x=len(self.sublib)
+        
+        #in case the last patch is occupied, add 2 new (empty) patches
+        if len(self.sublib[x].population)>0:
+            self.sublib[x+1]=subpop(x+1)
+            self.sublib[x+2]=subpop(x+2)
+            
+        #in case the next to last, but not the last patch is occupied, add 1 new (empty) patch
+        elif len(self.sublib[x-1].population)>0:
+            self.sublib[x+1]=subpop(x+1)
+    
+    #function to randomize order of individuals in all subpopulations
+    def randomize_pops(self):
+        for subpop in self.sublib.values():
+            rnd.shuffle(subpop.population)
+            
+            
+    #function to reshuffle/replace adult females
+    def reshuffle(self):
+        for subpop in self.sublib.values():
+            newpop=[]
+            for ind in subpop.population:
+                if ind.age >= ind.agemature:
+                    age=ind.age       #adult mites are picked, so age == agemature
+                    agemat=rnd.normal(agemature, sdagemature)
+                    fec=max(rnd.normal(fecundity, sdfec), 1)
+                    survival=rnd.binomial(1, adsurv)
+                    long=rnd.normal(longevity, sdlongevity)
+                    genotype=rnd.choice(genotypes)
+                    female=ind.female
+                    newpop.append(mite(agemat, fec, survival, long, genotype, female, age))
+                    subpop.population.remove(ind)
+            subpop.population.extend(newpop)
+
+#subpopulation class, requires position along the metapopulation as input variable    
+class subpop():
+    def __init__(self, position):
+        self.food=400                   #initial amount of food (in mm²)
+        self.population=[]              #list with all present individuals
+        self.position=position          #position along the metapopulation
+        
+    
+    #function to let mites feed (substract resources from the environment and store them as reserves
+    def feed(self):
+        for mite in self.population:
+            #multiplier term is 0.5 for subadult individuals, 1 for adult individuals 
+            if mite.age<mite.agemature:
+                mult=0.5
+            else:
+                mult=1
+
+            if mite.age>mite.agemature and mite.female==False:   #adult males don't eat
+                mult=0
+
+            #calculate eaten amount of leaf surface, limited to the amount of remaining food reserves of the leaf
+            eaten=rnd.normal(feed, sdfeed)*mult
+            if eaten > self.food:
+                eaten = self.food
+            #add eaten food to mite energy reserves and remove from leaf reserves
+            self.food-= eaten
+            mite.reserve += eaten
+            
+
+
+
+#function for a cycle of one day (sequential execution of all functions)
+def day(metapop):
+    #1) increase the day counter of the metapopulation
+    metapop.time += 1
+    
+    #2) let individuals disperse to new locations
+    metapop.disperse()
+    
+    #3) randomize order of mites within each subpopulation
+    metapop.randomize_pops()
+        
+    #4) let mites feed on the subpopulation where they are
+    for elem in metapop.sublib.values():
+        elem.feed()
+    
+    #5) let mites die, reproduce and age
+    for subpop in metapop.sublib.values():
+        new_gen =[]
+        for ind in subpop.population:
+            
+            #a) let appropriate mites die
+            die(subpop, ind)
+            
+            #b) let living mites reproduce
+            if len(subpop.population)>0: #only in case there are mites in the subpopulation
+                
+                #for every mite:
+                for _ in range(ind.reproduce(len(subpop.population))):
+                    #draw for every trait a number from a uniform distribution. If mutateprob>= this number, draw a new trait value
+                    #if not, use the parent trait value
+                    if Evolution==False : 
+                        mutateprob=1   
+                    else:
+                        mutateprob=0.001     #chance of mutation (as recombination replacement)
+                
+                    if rnd.uniform()<= mutateprob:
+                        fec=rnd.poisson(fecundity)
+                    else:
+                        fec=ind.fecundity
+                    if rnd.uniform()<= mutateprob:
+                        survival=rnd.binomial(1, adsurv)
+                    else:
+                        survival=ind.adsurv
+                    if rnd.uniform()<= mutateprob:
+                        long=rnd.normal(longevity, sdlongevity)
+                    else:
+                        long=ind.longevity
+                    if rnd.uniform()<= mutateprob:
+                        agemat=rnd.normal(agemature, sdagemature)
+                    else:
+                        agemat=ind.agemature
+                        
+                    if rnd.random()<sex_ratio:
+                        female=True
+                    else:
+                        female=False
+                        
+                    #add new individual to new generation list
+                    new_gen.append(mite(agemat, fec, survival, long, female, ind.genotype))
+                        
+            #c) let individuals lose energy (from personal reserve)
+            if ind.age < ind.agemature:
+                mult=0.5
+            else:
+                mult=1
+            ind.reserve -= energyloss*mult
+            
+            #d) let individuals age
+            ind.ageing()
+            
+        #add new offspring to the subpopulation
+        subpop.population.extend(new_gen)
+        
+    #6 reshuffle if necessary:
+    if reshuffling==True:
+        if metapop.time%8 < 0.01 and metapop.time <= 65:
+            metapop.reshuffle()
+        
+    #7) extension of metapopulation at fixed days (day 1, 3 and 5 of week)
+    weekday=metapop.time%7
+    if weekday==1 or weekday==3 or weekday==5:
+        metapop.extend()
+    #8) replenishment of reserves (leaf renewal)
+    if weekday==0:
+        for elem in metapop1.sublib.values():
+            elem.food += 400
+ 
+
+                 
+#create outputfile
+title = "RFS_"+str(reshuffling)+"_Evolution_"+str(Evolution)+".csv"
+outfile = open(title, 'a')
+line = ""
+coreagemature, corefecundity, coreadsurv, corelongevity = [], [], [], []
+edgeagemature, edgefecundity, edgeadsurv, edgelongevity = [], [], [], []
+
+
+#create list for metapop lengths
+len_list=[]            
+for i in range(10000):                               #set number of iterations (loop)
+    metapop1=metapop()                              #create a new metapop object
+    for i in range(80):
+        day(metapop1)                               #let it run for 80 days 
+    if not sum([len(metapop1.sublib[i].population) for i in range(1, len(metapop1.sublib))]) == 0:
+        len_list.append(len(metapop1.sublib)) 
+        print(len(metapop1.sublib), file = outfile)  
+        #add metapop length to list
+
+    #add trait values of individuals from core (patch1) and edge (laatste 3 patches met individuen) 
+    #to lists, in order to later create histograms
+    if metapop1.sublib[1].population:
+        coreagemature.append(np.mean([ind.agemature for ind in metapop1.sublib[1].population]))
+        corefecundity.append(np.mean([ind.fecundity for ind in metapop1.sublib[1].population]))
+        coreadsurv.append(np.mean([ind.adsurv for ind in metapop1.sublib[1].population]))
+        corelongevity.append(np.mean([ind.longevity for ind in metapop1.sublib[1].population]))
+    count = 0
+    templist1, templist2, templist3, templist4 = [], [], [], []
+    for i in range(len(metapop1.sublib), 0, -1):
+        if count < 3 and i > 0:
+            if metapop1.sublib[i].population:
+                templist1.extend([ind.agemature for ind in metapop1.sublib[i].population])
+                templist2.extend([ind.fecundity for ind in metapop1.sublib[i].population])
+                templist3.extend([ind.adsurv for ind in metapop1.sublib[i].population])
+                templist4.extend([ind.longevity for ind in metapop1.sublib[i].population])
+                count += 1
+    if templist1:
+        edgeagemature.append(np.mean(templist1))
+        edgefecundity.append(np.mean(templist2))
+        edgeadsurv.append(np.mean(templist3))
+        edgelongevity.append(np.mean(templist4))
+
+#Plot histogram of range expansion including mean line                
+plt.hist(len_list, max(len_list) - min(len_list), normed=1, facecolor='grey')
+plt.xlabel('Expansion')
+plt.ylabel('Density')
+plt.title("RFS_"+str(reshuffling)+"_Evolution_"+str(Evolution))
+plt.axvline(np.mean(len_list), color='r', linewidth=2)
+plt.show()        
+        
+len_list.sort()                                     #sort and print list of metapop lengths
+print(len_list)
+print(sum(len_list)/len(len_list))   
+
+
+
+#Create histogram for every trait, including line for mean value
+for elem in ["agemature", "fecundity", "adsurv", "longevity"]:
+    if elem == "agemature":
+        name = "age_mature"
+    elif elem == "adsurv":
+        name = "adult_survival"
+    else:
+        name = elem
+    
+        
+    plt.hist(eval("core{}".format(elem)), 25, normed=1, facecolor='blue', alpha = 0.5, label="Core")
+    plt.hist(eval("edge{}".format(elem)), 25, normed=1, facecolor='green', alpha = 0.5, label="Edge")
+    plt.xlabel('Mean {}'.format(name))
+    plt.ylabel('Probability')
+    plt.title("RFS_"+str(reshuffling)+"_Evolution_"+str(Evolution)+"_{}".format(name))
+    plt.axvline(np.mean(eval("core{}".format(elem))), color='b', linewidth=2)
+    plt.axvline(np.mean(eval("edge{}".format(elem))), color='g', linewidth=2)
+    plt.legend(loc='upper right')
+    plt.show()
+            #print mean metapop length
+
+        #method used to generate an output file
+ 
+outfile.close()
