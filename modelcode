@@ -104,6 +104,8 @@ class metapop():
         for i in range(10): 
             age=round(rnd.normal(agemature, sdagemature))       #adult mites are picked, so age == agemature
             agemat = rnd.normal(agemature, sdagemature)
+                if age<0: age=0
+                if agemat<0: agemat=0
             fec=max(rnd.normal(fecundity, sdfec), 1)
             survival=rnd.binomial(1, adsurv)
             long=rnd.normal(longevity, sdlongevity)
