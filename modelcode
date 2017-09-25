@@ -1,16 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 Created on We Oct 19 21:54:13 2016
-@author: Felix Moerman, adapted by DBonte
-Modifications by Dries: 
-implementation of new reaction norm dispersal according to relatedness (data from Bitume et al. 2013,with Bonte et al. 2014 as a refernce for the mix;, combined day1, final graph mean distanc)
-see excell sheet Relatedness_bitume
-implementaion of reserve-threshold for dispersal: only those mites with sufficient reserves disperse
-Reproduction function according to own data ~ Barati & Hejazi 2015 Exp Appl Acar
-Choice function to allow/switch off evolution
-standard deviations to 95%CI
-threshold 3.35 (disp) & 1-3 (repr) standard
-sex ratio is now considered!
+@author: Felix Moerman & Dries Bonte
 """
 
 
@@ -104,8 +95,10 @@ class metapop():
         for i in range(10): 
             age=round(rnd.normal(agemature, sdagemature))       #adult mites are picked, so age == agemature
             agemat = rnd.normal(agemature, sdagemature)
-                if age<0: age=0
-                if agemat<0: agemat=0
+            if age<0: 
+                age=0
+            if agemat<0: 
+                agemat=0
             fec=max(rnd.normal(fecundity, sdfec), 1)
             survival=rnd.binomial(1, adsurv)
             long=rnd.normal(longevity, sdlongevity)
@@ -320,7 +313,8 @@ def day(metapop):
                         female=False
                         
                     #add new individual to new generation list
-                    new_gen.append(mite(agemat, fec, survival, long, female, ind.genotype))
+                    new_gen.append(mite(agemat, fec, survival, long, ind.genotype, female))
+                    
                         
             #c) let individuals lose energy (from personal reserve)
             if ind.age < ind.agemature:
@@ -350,10 +344,54 @@ def day(metapop):
             elem.food += 400
  
 
+#function to calculate relatedness in a population
+def calc_relatedness(metapop1):
+    
+    #loop through the metapopulation
+    for i in range(len(metapop1.sublib)):
+        
+        #look only at populations with individuals
+        genotype_counts={}
+        if len(metapop1.sublib[i+1].population)>0:
+            individuals=0
+            
+            
+            #count for adult mites how many of each relatedness genotype and how many total adults are present
+            for ind in metapop1.sublib[i+1].population:
+                individuals += 1
+                genotype_counts[ind.genotype]=genotype_counts.get(ind.genotype, 0) + 1
+            relatedness = 0
+            
+            #calculate relatedness if more than 1 individuals is present
+            #relatedness is calculated by calculating which proportion of the rest of the adults is of the same relatedness genotype
+            #summing this for all adults, and dividing it by the total number of adults present in the population
+            if individuals>1:
+                for elem in genotype_counts.values():
+                    relatedness += elem*(elem-1)/(individuals-1)
+                relatedness /= individuals 
+                
+            #if only 1 or 0 individuals are present in the population, relatedness is not calculated, and an "NA" value is printed out
+            else:
+                relatedness=="NA"
+        else:
+            relatedness = "NA"
+        print(relatedness, file=outfile2, end="")
+        print(len(genotype_counts), file=outfile3, end="")
+        if i+1 < len(metapop1.sublib):
+            print(",", file=outfile2, end="")
+            print(",", file=outfile3, end="")
+    print("", file=outfile2)
+    print("", file=outfile3)
+    return None
+    
+        
+
                  
 #create outputfile
 title = "RFS_"+str(reshuffling)+"_Evolution_"+str(Evolution)+".csv"
 outfile = open(title, 'a')
+outfile2 = open("relatedness_"+title, "a")
+outfile3 = open("strainnumber"+title, "a")
 line = ""
 coreagemature, corefecundity, coreadsurv, corelongevity = [], [], [], []
 edgeagemature, edgefecundity, edgeadsurv, edgelongevity = [], [], [], []
@@ -363,8 +401,10 @@ edgeagemature, edgefecundity, edgeadsurv, edgelongevity = [], [], [], []
 len_list=[]            
 for i in range(10000):                               #set number of iterations (loop)
     metapop1=metapop()                              #create a new metapop object
-    for i in range(80):
-        day(metapop1)                               #let it run for 80 days 
+    for j in range(80):
+        day(metapop1)                               #let it run for 80 days
+        if (j+1)%10 == 0:
+            calc_relatedness(metapop1)
     if not sum([len(metapop1.sublib[i].population) for i in range(1, len(metapop1.sublib))]) == 0:
         len_list.append(len(metapop1.sublib)) 
         print(len(metapop1.sublib), file = outfile)  
@@ -393,8 +433,9 @@ for i in range(10000):                               #set number of iterations (
         edgeadsurv.append(np.mean(templist3))
         edgelongevity.append(np.mean(templist4))
 
-#Plot histogram of range expansion including mean line                
-plt.hist(len_list, max(len_list) - min(len_list), normed=1, facecolor='grey')
+#Plot histogram of range expansion including mean line
+plt.figure(figsize=(6,4), dpi=300)            
+plt.hist(len_list, bins=range(min(len_list), 54, 2), facecolor='grey')
 plt.xlabel('Expansion')
 plt.ylabel('Density')
 plt.title("RFS_"+str(reshuffling)+"_Evolution_"+str(Evolution))
@@ -416,7 +457,7 @@ for elem in ["agemature", "fecundity", "adsurv", "longevity"]:
     else:
         name = elem
     
-        
+    plt.figure(figsize=(4,4), dpi=300)        
     plt.hist(eval("core{}".format(elem)), 25, normed=1, facecolor='blue', alpha = 0.5, label="Core")
     plt.hist(eval("edge{}".format(elem)), 25, normed=1, facecolor='green', alpha = 0.5, label="Edge")
     plt.xlabel('Mean {}'.format(name))
@@ -431,3 +472,5 @@ for elem in ["agemature", "fecundity", "adsurv", "longevity"]:
         #method used to generate an output file
  
 outfile.close()
+outfile2.close()
+outfile3.close()
